@@ -1,4 +1,4 @@
-"""Exercise ADK graph routing, research iterations, and native tool configuration."""
+"""Exercise the ADK research graph with scripted models and real tool dispatch."""
 
 from collections import defaultdict, deque
 from types import SimpleNamespace
@@ -14,10 +14,12 @@ from pydantic import PrivateAttr
 
 from due_diligence.runtime import ResearchAssistant
 from due_diligence.sources import SUCCESS, URL_RETRIEVAL, UrlReadingGemini, public_url
-from due_diligence.workflow import Gaps, Plan
+from due_diligence.workflow import Assessment, Brief, Feedback, ResearchPlan, Task
 
 URL = "https://example.com/filings/annual-report.pdf"
-LEAD = "A search-only lead that must stay out of the case context."
+LEAD = "A search-only lead that must stay out of case context."
+CONTROL = Task(title="Control", question="Who controls the company?", rationale="Material ownership.")
+LEGAL = Task(title="Disputes", question="What material disputes were disclosed?", rationale="Legal risks.")
 
 
 def message(text, **metadata):
@@ -26,22 +28,36 @@ def message(text, **metadata):
     )
 
 
-def decision(action, objective="Review Example Holdings.", **fields):
-    return message(Plan(action=action, objective=objective, **fields).model_dump_json())
+def structured(result):
+    return message(result.model_dump_json())
 
 
-def gaps(*questions):
-    return message(Gaps(follow_up=list(questions)).model_dump_json())
+def brief(**fields):
+    return structured(Brief(
+        subject="Example Holdings", purpose="Screen ownership risk.", overview="A listed company.",
+        identifiers=["12345"], aliases=["Example Group"], brands=["Example Retail"],
+        ownership_and_control=["Voting rights require verification."], **fields,
+    ))
 
 
-def call(name, **args):
-    part = types.Part.from_function_call(name=name, args=args)
-    part.function_call.id = f"test-{name}"
+def plan(*tasks):
+    return structured(ResearchPlan(objective="Assess material risks.", tasks=list(tasks)))
+
+
+def assessment(decision="sufficient", report="Checked the original.", next_step=""):
+    return structured(Assessment(
+        decision=decision, assessment="Source quality reviewed.", report=report, next_step=next_step,
+    ))
+
+
+def call(tool_name, **args):
+    part = types.Part.from_function_call(name=tool_name, args=args)
+    part.function_call.id = f"test-{tool_name}"
     return LlmResponse(content=types.Content(role="model", parts=[part]))
 
 
 def read_call(url=URL):
-    return call("read_public_url", url=url, question="Who controls the company?")
+    return call("read_public_url", url=url, question=CONTROL.question)
 
 
 def retrieval(url=URL, status=SUCCESS.value):
@@ -51,7 +67,7 @@ def retrieval(url=URL, status=SUCCESS.value):
 
 
 class ScriptedGemini(BaseLlm):
-    """Supply deterministic responses after ADK has constructed each model request."""
+    """Supply deterministic responses after ADK has constructed each request."""
 
     _scripts = PrivateAttr(default_factory=lambda: defaultdict(deque))
     _requests = PrivateAttr(default_factory=lambda: defaultdict(list))
@@ -68,13 +84,12 @@ class ScriptedGemini(BaseLlm):
             role = "url"
         else:
             roles = {
-                "Classify the current user request": "planner",
-                "Confirm the legal name": "entity",
-                "Summarize the scoped entity": "overview",
-                "Research one assigned question": "topic",
-                "Try to find independently sourced evidence": "review",
-                "Decide whether the reviewer": "gaps",
-                "Respond in English": "compose",
+                "You write the Research Brief": "brief",
+                "You are the Research Planner": "planner",
+                "You are a Research Worker": "worker",
+                "You are the local Worker Evaluator": "worker_evaluator",
+                "You are the Research Evaluator": "evaluator",
+                "Classify the user's reply": "feedback",
             }
             role = next(role for marker, role in roles.items() if marker in instruction)
         self._requests[role].append(llm_request.model_copy(update={
@@ -93,154 +108,149 @@ class CoreTests(IsolatedAsyncioTestCase):
         self.assistant = ResearchAssistant(self.model)
         self.addAsyncCleanup(self.assistant.close)
 
-    async def test_can_start_with_review_then_switch_to_overview(self):
+    def standard_run(self, *tasks):
+        self.model.add("brief", brief())
+        self.model.add("planner", plan(*tasks))
+        self.model.add("evaluator", message("Report for review."))
+
+    async def test_brief_waits_for_clarification_then_runs_the_graph(self):
         self.assertIsInstance(self.assistant.agent, Workflow)
-        self.model.add("planner", decision("review"), decision("overview"))
-        self.model.add("review", message("No source establishes voting control."))
-        self.model.add("gaps", gaps())
-        self.model.add("overview", message("Preliminary overview."))
-        self.model.add("compose", message("The control claim is unresolved."), message("Overview."))
+        self.model.add("brief", brief(clarification_questions=["Which jurisdiction?"]), brief())
+        self.model.add("planner", plan(CONTROL))
+        self.model.add("worker", message("A holder has 55% of the votes."))
+        self.model.add("worker_evaluator", assessment())
+        self.model.add("evaluator", message("Draft conclusions."))
 
-        first = await self.assistant.ask("Review the control claim before profiling.")
-        second = await self.assistant.ask("Switch to a preliminary overview.")
-        self.assertEqual(first.stages, ["plan", "review", "assess", "compose"])
-        self.assertEqual(second.stages, ["plan", "overview", "compose"])
-        self.assertIn("unresolved", first.answer)
-        self.assertIn("before profiling", str(self.model._requests["planner"][1].contents))
+        first = await self.assistant.ask("Investigate Example Holdings.")
+        self.assertEqual(first.stages, ["start", "research_brief"])
+        self.assertIn("Which jurisdiction?", first.answer)
+        self.assertEqual(first.record.status, "needs_clarification")
+        self.assertNotIn("planner", self.model._requests)
 
-    async def test_plan_waits_and_approval_runs_the_topics_that_were_shown(self):
-        self.model.add(
-            "planner",
-            decision("investigate", topics=["Voting control", "Regulatory disclosures"], needs_approval=True),
-            decision("investigate", topics=["Unapproved extra work"], uses_pending_plan=True),
-        )
-        self.model.add("topic", message("First finding."), message("Second finding."))
-        self.model.add("compose", message("The two approved topics were investigated."))
-
-        proposed = await self.assistant.ask("Suggest topics to investigate.")
-        self.assertEqual(proposed.stages, ["plan", "propose"])
-        self.assertIn("Regulatory disclosures", proposed.answer)
-        self.assertFalse(self.model._requests["topic"])
-        approved = await self.assistant.ask("Go ahead with the plan.")
-        self.assertEqual(approved.stages, ["plan", "investigate", "compose"])
-        self.assertIn("Regulatory disclosures", str(self.model._requests["planner"][1].contents))
-        requests = str([request.contents for request in self.model._requests["topic"]])
-        self.assertIn("Voting control", requests)
-        self.assertIn("Regulatory disclosures", requests)
-        self.assertNotIn("Unapproved extra work", requests)
-
-    async def test_review_rechecks_new_questions_until_the_follow_up_limit(self):
-        self.model.add("planner", decision("investigate", topics=["Control"], review_findings=True))
-        self.model.add(
-            "topic", message("Control at filing date."), message("Later filing changed control."),
-            message("Registry confirms the later filing."),
-        )
-        self.model.add(
-            "review", message("A later filing may contradict the claim."),
-            message("Check the registry for independent confirmation."),
-            message("Revise the claim."),
-        )
-        self.model.add(
-            "gaps", gaps("control", "Check the later filing", "Check the later filing"),
-            gaps("Check the registry"),
-        )
-        self.model.add("compose", message("The later filing supersedes the initial finding."))
-
-        result = await self.assistant.ask("Investigate the control claim.")
-        self.assertEqual(result.stages, [
-            "plan", "investigate", "review", "assess", "investigate", "review",
-            "assess", "investigate", "review", "compose",
+        second = await self.assistant.ask("United Kingdom.")
+        self.assertEqual(second.stages, [
+            "start", "research_brief", "research_planner", "research_workers", "research_evaluator"
         ])
-        self.assertEqual(len(self.model._requests["topic"]), 3)
-        inputs = str(self.model._requests["compose"][0].contents)
-        self.assertIn("Later filing changed control", inputs)
-        self.assertIn("Registry confirms the later filing", inputs)
+        self.assertEqual(second.record.status, "awaiting_review")
+        self.assertEqual(second.record.brief.aliases, ["Example Group"])
+        self.assertIn("previous_brief", str(self.model._requests["brief"][1].contents))
+        self.assertIn("Example Retail", str(self.model._requests["planner"][0].contents))
+        self.assertIn("Checked the original", str(self.model._requests["evaluator"][0].contents))
 
-    async def test_topic_uses_url_context_and_returns_findings_to_synthesis(self):
-        self.model.add("planner", decision("investigate", topics=[f"Read {URL}"]))
-        self.model.add("topic", read_call(), message("50% of the voting rights."))
-        self.model.add("url", message("50% of the voting rights.", custom_metadata=retrieval()))
-        self.model.add("compose", message("The filing discloses voting control."))
+    async def test_each_worker_has_an_independent_evaluation_loop_and_report(self):
+        self.standard_run(CONTROL)
+        self.model.add("worker", message("Initial filing."), message("New filing."), message("Registry."))
+        self.model.add(
+            "worker_evaluator",
+            assessment("follow_up", "First provisional report.", "Read later filing."),
+            assessment("follow_up", "Second provisional report.", "Cross-check registry."),
+            assessment("follow_up", "Material partial finding.", "Look for third source."),
+        )
+        turn = await self.assistant.ask("Check voting control.")
+        report = turn.record.worker_reports[0]
+        self.assertEqual((report.status, report.passes), ("partial", 3))
+        self.assertIn("follow-up limit", report.stopping_reason)
+        self.assertIn("Read later filing", str(self.model._requests["worker"][1].contents))
+        self.assertIn("Material partial finding", str(self.model._requests["evaluator"][0].contents))
 
-        result = await self.assistant.ask("Investigate the ownership filing.")
-        self.assertEqual(result.stages, ["plan", "investigate", "compose"])
-        self.assertCountEqual(result.calls, ["read_public_url", "url_context"])
-        self.assertIn("50% of the voting rights.", str(self.model._requests["topic"][1].contents))
-        self.assertIn("50% of the voting rights.", str(self.model._requests["compose"][0].contents))
+    async def test_parallel_worker_reports_keep_their_task_and_stop_independently(self):
+        self.standard_run(CONTROL, LEGAL)
+        self.model.add("worker", message("Ownership finding."), message("Legal finding."))
+        self.model.add("worker_evaluator", assessment(), assessment("unresolved", "Gap."))
+        turn = await self.assistant.ask("Investigate the two workstreams.")
+        by_question = {report.task.question: report for report in turn.record.worker_reports}
+        self.assertEqual(set(by_question), {CONTROL.question, LEGAL.question})
+        self.assertCountEqual([report.status for report in by_question.values()], ["complete", "unresolved"])
+        self.assertEqual(len(self.model._requests["worker_evaluator"]), 2)
 
-    async def test_search_is_native_and_does_not_enter_case_context(self):
-        self.model.add("planner", decision("investigate"), decision("answer"))
-        self.model.add("topic", call("search_public_web", query="Example Holdings official filings"),
-                       message("A discovery result is available."))
-        self.model.add("compose", message("A discovery result is available."),
-                       message("Please provide the original filing."))
+    async def test_restart_revision_and_approval_follow_report_review(self):
+        self.standard_run()
+        self.model.add("feedback", structured(Feedback(action="revise")))
+        self.model.add("evaluator", message("Revised report."))
+        first = await self.assistant.ask("Screen Example Holdings.")
+        second = await self.assistant.ask("Shorten the draft.")
+        self.assertEqual(second.stages, ["start", "research_evaluator"])
+        self.assertEqual(second.record.draft, "Revised report.")
+        self.assertEqual(first.record.draft, "Report for review.")
+        saved_brief = await self.assistant.ask("/brief")
+        self.assertEqual(saved_brief.stages, ["start", "show_brief"])
+        self.assertIn("Example Retail", saved_brief.answer)
+        third = await self.assistant.ask("/approve")
+        self.assertEqual(third.record.status, "approved")
+        self.model.add("brief", brief(brief_only=True))
+        fourth = await self.assistant.ask("/restart")
+        self.assertEqual(fourth.stages, ["start", "research_brief"])
+        self.assertEqual(fourth.record.status, "brief_ready")
+        self.assertEqual(fourth.record.request, "Screen Example Holdings.")
+        self.assertFalse(fourth.record.draft)
+
+    async def test_all_research_stages_can_load_skills_and_read_the_web(self):
+        self.model.add("brief", call("load_research_skill", name="public-company-diligence"), brief())
+        self.model.add("planner", plan(CONTROL))
+        self.model.add("worker", call("fetch_public_document", url=URL), message("55% of votes."))
+        self.model.add("worker_evaluator", read_call(), assessment())
+        self.model.add("url", message("55% of votes.", custom_metadata=retrieval()))
+        self.model.add("evaluator", message("The filing supports the finding."))
+
+        with patch("due_diligence.runtime.fetch_document", new_callable=AsyncMock) as fetch:
+            fetch.return_value = {"status": "retrieved", "text": "55% of votes.", "url": URL}
+            turn = await self.assistant.ask("Investigate the ownership filing.")
+        self.assertCountEqual(turn.calls, [
+            "load_research_skill", "fetch_public_document", "httpx_fetch", "read_public_url", "url_context"
+        ])
+        expected = {"search_public_web", "read_public_url", "fetch_public_document", "load_research_skill"}
+        for role in ("brief", "planner", "worker", "worker_evaluator", "evaluator"):
+            declarations = {
+                decl.name for tool in self.model._requests[role][0].config.tools or []
+                for decl in tool.function_declarations or []
+            }
+            self.assertTrue(expected.issubset(declarations), role)
+        self.assertIn("loaded", str(self.model._requests["brief"][1].contents))
+
+    async def test_grounded_search_text_stays_outside_question_reports(self):
+        self.model.add(
+            "brief", call("search_public_web", query="Example Holdings official filings"), brief(),
+        )
+        self.model.add("planner", plan())
+        self.model.add("evaluator", message("Discovery is available separately."))
         self.model.add("search", message(
             LEAD, grounding_metadata=types.GroundingMetadata(
                 search_entry_point=types.SearchEntryPoint(rendered_content="<div>Search</div>")
             )
         ))
+        turn = await self.assistant.ask("Find public leads.")
+        self.assertCountEqual(turn.calls, ["search_public_web", "google_search"])
+        self.assertEqual(turn.searches[0].text, LEAD)
+        for role in ("brief", "planner", "evaluator"):
+            self.assertNotIn(LEAD, str([request.contents for request in self.model._requests[role]]))
 
-        result = await self.assistant.ask("Find public leads.")
-        await self.assistant.ask("What do we still need?")
-        self.assertCountEqual(result.calls, ["search_public_web", "google_search"])
-        self.assertEqual(result.searches[0].text, LEAD)
-        for role in ("planner", "topic", "compose"):
-            for request in self.model._requests[role]:
-                self.assertNotIn(LEAD, str(request.contents))
-
-    async def test_url_response_requires_success_metadata_for_requested_url(self):
-        for metadata in (
-            None,
-            retrieval(status="URL_RETRIEVAL_STATUS_PAYWALL"),
-            retrieval(url="https://other.example.org/"),
-        ):
-            with self.subTest(metadata=metadata):
-                self.model.add("planner", decision("investigate"))
-                self.model.add("topic", read_call(), message("The source is unavailable."))
-                self.model.add("url", message("Unverified synthetic content.", custom_metadata=metadata))
-                self.model.add("compose", message("Unable to verify."))
-                await self.assistant.ask("Read the ownership source.")
-                response = str(self.model._requests["topic"][-1].contents)
-                self.assertIn("unverified", response)
-                self.assertNotIn("Unverified synthetic content.", response)
-
-    async def test_invalid_url_does_not_consume_source_budget(self):
-        self.model.add("planner", decision("investigate"))
-        self.model.add("topic", read_call("http://127.0.0.1/a"), message("Choose a public URL."))
-        self.model.add("compose", message("Choose a public URL."))
-        result = await self.assistant.ask("Read this location.")
-        self.assertEqual(result.calls, ["read_public_url"])
-        self.assertFalse(self.model._requests["url"])
-        self.assertEqual(result.source_calls, 0)
-
-    async def test_parallel_topics_share_source_budget(self):
-        limited = ResearchAssistant(self.model, max_source_calls=1)
+    async def test_final_evaluator_can_use_reserved_source_budget(self):
+        limited = ResearchAssistant(self.model, max_source_calls=2)
         self.addAsyncCleanup(limited.close)
-        self.model.add("planner", decision("investigate", topics=["First", "Second"]))
-        self.model.add("topic", read_call(), read_call("https://example.org/filing"),
-                       message("First source checked."), message("Second source checked."))
-        self.model.add("url", message("The provider did not verify this source."))
-        self.model.add("compose", message("The lookup budget has been reached."))
+        self.model.add("brief", read_call(), brief())
+        self.model.add("planner", plan(CONTROL))
+        self.model.add("worker", read_call(), message("The worker could not fetch a source."))
+        self.model.add("worker_evaluator", assessment("follow_up", next_step="Read an update."))
+        self.model.add("evaluator", read_call(), message("Report for review."))
+        self.model.add("url", message("Unverified."), message("55%.", custom_metadata=retrieval()))
 
-        result = await limited.ask("Inspect two filings.")
-        self.assertEqual(result.source_calls, 1)
-        self.assertCountEqual(result.calls, ["url_context", "read_public_url", "read_public_url"])
-        self.assertTrue(any("source_call_limit" in str(request.contents)
-                            for request in self.model._requests["topic"]))
+        turn = await limited.ask("Investigate voting control.")
+        self.assertEqual(turn.source_calls, 2)
+        self.assertEqual(turn.record.worker_reports[0].status, "partial")
+        worker_inputs = str(self.model._requests["worker"][1].contents)
+        self.assertIn("source_call_limit", worker_inputs)
 
-    async def test_clarification_and_revision_skip_research(self):
-        self.model.add(
-            "planner",
-            decision("clarify", message="Which jurisdiction?"),
-            decision("revise", objective="Shorten the executive summary."),
-        )
-        self.model.add("compose", message("Shorter executive summary."))
-        first = await self.assistant.ask("Identify Example Holdings.")
-        second = await self.assistant.ask("Shorten my draft's executive summary without more research.")
-        self.assertEqual(first.stages, ["plan", "clarify"])
-        self.assertEqual(second.stages, ["plan", "compose"])
-        self.assertEqual(first.answer, "Which jurisdiction?")
-        self.assertEqual(second.calls, [])
+    async def test_url_context_does_not_release_content_without_requested_url_success(self):
+        self.standard_run(CONTROL)
+        self.model.add("worker", read_call(), message("The source is unavailable."))
+        self.model.add("url", message(
+            "Unverified synthetic content.", custom_metadata=retrieval("https://other.example.org/")
+        ))
+        self.model.add("worker_evaluator", assessment("unresolved"))
+        await self.assistant.ask("Read the ownership source.")
+        response = str(self.model._requests["worker"][-1].contents)
+        self.assertIn("unverified", response)
+        self.assertNotIn("Unverified synthetic content.", response)
 
     async def test_native_url_model_preserves_provider_metadata(self):
         raw = types.GenerateContentResponse(candidates=[types.Candidate(
@@ -258,17 +268,13 @@ class CoreTests(IsolatedAsyncioTestCase):
             ))
             results = [result async for result in reader.generate_content_async(request)]
         self.assertEqual(results[0].custom_metadata, retrieval())
-        self.assertIsNotNone(generate.await_args.kwargs["config"].tools[0].url_context)
 
 
 class UrlTests(TestCase):
-    def test_public_urls_reject_credentials_private_hosts_and_non_http_schemes(self):
-        for url in (
-            "file:///etc/passwd", "http://localhost/", "http://127.0.0.1/", "http://[::1]/",
-            "http://10.0.0.1/", "https://example.com.internal/",
-            "https://user:password@example.com/", "https://example.com:8080/",
-        ):
+    def test_public_urls_reject_private_addresses_and_credentials(self):
+        for url in ("file:///etc/passwd", "http://localhost/", "http://127.0.0.1/", "http://[::1]/",
+                    "http://10.0.0.1/", "https://example.com.internal/",
+                    "https://user:password@example.com/", "https://example.com:8080/"):
             with self.subTest(url=url):
                 self.assertIsNone(public_url(url))
         self.assertEqual(public_url(f"{URL}#page=4"), URL)
-        self.assertEqual(public_url("https://example.com"), "https://example.com/")

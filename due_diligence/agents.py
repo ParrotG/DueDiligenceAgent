@@ -1,4 +1,4 @@
-"""Build the language-model nodes used by the investigation graph."""
+"""Construct the agents used by the research workflow."""
 
 from google.adk.agents import Agent
 
@@ -6,63 +6,28 @@ from .config import generation_config
 from .prompts import prompt, research_prompt
 
 
-def make_agents(model, search, read_url, plan_schema, gap_schema, thinking_level):
-    """Create independent planner, investigator, reviewer, and synthesis agents."""
-    source_tools = [search, read_url]
-    return {
-        "planner": Agent(
-            name="plan_request",
-            model=model,
-            instruction=prompt("planner"),
-            output_schema=plan_schema,
-            mode="single_turn",
-            generate_content_config=generation_config(thinking_level),
-        ),
-        "entity": Agent(
-            name="entity_research",
-            model=model,
-            instruction=research_prompt("entity"),
-            tools=source_tools,
-            mode="single_turn",
-            generate_content_config=generation_config(thinking_level),
-        ),
-        "overview": Agent(
-            name="preliminary_research",
-            model=model,
-            instruction=research_prompt("overview"),
-            tools=source_tools,
-            mode="single_turn",
-            generate_content_config=generation_config(thinking_level),
-        ),
-        "topic": Agent(
-            name="topic_research",
-            model=model,
-            instruction=research_prompt("topic"),
-            tools=source_tools,
-            mode="single_turn",
-            generate_content_config=generation_config(thinking_level),
-        ),
-        "review": Agent(
-            name="claim_review",
-            model=model,
-            instruction=research_prompt("review"),
-            tools=source_tools,
-            mode="single_turn",
-            generate_content_config=generation_config(thinking_level),
-        ),
-        "gaps": Agent(
-            name="assess_coverage",
-            model=model,
-            instruction=research_prompt("gaps"),
-            output_schema=gap_schema,
-            mode="single_turn",
-            generate_content_config=generation_config(thinking_level),
-        ),
-        "compose": Agent(
-            name="compose_response",
-            model=model,
-            instruction=research_prompt("synthesis"),
-            mode="single_turn",
-            generate_content_config=generation_config(thinking_level),
-        ),
+def make_agents(model, network_tools, skills, schemas, thinking_level):
+    """Give each substantive research stage the same public-source tools."""
+    roles = {
+        "brief": "Research Brief",
+        "planner": "Research Planner",
+        "worker": "Research Worker",
+        "worker_evaluator": "Worker Evaluator",
+        "evaluator": "Research Evaluator",
+        "report_feedback": "Report Feedback Router",
     }
+    agents = {}
+    catalogue = f"\n\n{prompt('skill_use')}\n{skills.catalogue()}"
+    for role, title in roles.items():
+        researches = role != "report_feedback"
+        agents[role] = Agent(
+            name=role,
+            description=title,
+            model=model,
+            instruction=research_prompt(role) + catalogue if researches else prompt(role),
+            tools=[*network_tools, skills.load_research_skill] if researches else [],
+            output_schema=schemas.get(role),
+            mode="single_turn",
+            generate_content_config=generation_config(thinking_level),
+        )
+    return agents

@@ -55,7 +55,8 @@ async def run(args: argparse.Namespace) -> int:
     try:
         if args.prompt is not None:
             return 0 if await respond(args.prompt) else 1
-        print("Due Diligence Agent. Enter /reset for a new case or /quit to exit.")
+        print("Due Diligence Agent. Enter a research request or /quit to exit.")
+        print("Case commands: /brief, /approve, /revise <feedback>, /restart [scope], /reset.")
         while True:
             message = (await asyncio.to_thread(input, "You> ")).strip()
             if message == "/quit":

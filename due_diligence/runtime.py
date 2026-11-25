@@ -12,6 +12,8 @@ from google.adk.runners import InMemoryRunner
 from google.genai import errors, types
 
 from .config import load_settings, make_client
+from .http_sources import fetch_document
+from .research_skills import ResearchSkills
 from .sources import (
     SUCCESS,
     URL_RETRIEVAL,
@@ -23,7 +25,7 @@ from .sources import (
     source_response,
 )
 
-from .workflow import Investigation, make_workflow
+from .workflow import Investigation, ResearchRecord, make_workflow
 
 
 @dataclass
@@ -43,6 +45,7 @@ class Turn:
     calls: list[str] = field(default_factory=list)
     searches: list[SearchResult] = field(default_factory=list)
     source_calls: int = 0
+    record: ResearchRecord | None = None
 
 
 class ResearchAssistant:
@@ -53,11 +56,13 @@ class ResearchAssistant:
         self._current = ContextVar[tuple[Turn, Investigation]]("investigation")
         self._lock = asyncio.Lock()
         self._history: list[dict[str, str]] = []
-        self._pending_plan = None
+        self._record = ResearchRecord()
         self._max_source_calls = (
             self.settings.workflow.max_source_calls
             if max_source_calls is None else max_source_calls
         )
+        reserve = min(self.settings.workflow.evaluator_source_reserve, self._max_source_calls // 2)
+        self._worker_source_limit = self._max_source_calls - reserve
         self._client = None
         model = model or self.settings.gemini.model
         if isinstance(model, str):
@@ -69,19 +74,35 @@ class ResearchAssistant:
             model, url_model or model, self.settings.gemini.thinking_level
         )
         self.agent = make_workflow(
-            model, self.search_public_web, self.read_public_url,
-            self._current.get, self.settings, self._max_source_calls,
+            model, [self.search_public_web, self.read_public_url, self.fetch_public_document],
+            ResearchSkills(), self._current.get, self.settings, self._worker_source_limit,
         )
         self._runner = InMemoryRunner(agent=self.agent, app_name=self.agent.name)
 
     async def ask(self, message: str) -> Turn:
-        """Run one graph invocation using prior turns and any plan awaiting approval."""
+        """Run one graph invocation with the case record and latest user feedback."""
         message = message.strip()
         if not message:
             raise ValueError("Enter a research request.")
+        command, _, detail = message.partition(" ")
+        actions = {
+            "/approve": "approve", "/revise": "revise",
+            "/restart": "restart", "/brief": "show_brief",
+        }
+        action = actions.get(command.lower())
+        if action == "revise" and not detail.strip():
+            return Turn(
+                answer="Describe what to change after /revise.",
+                record=self._record.model_copy(deep=True),
+            )
         async with self._lock:
             turn = Turn()
-            work = Investigation(message, list(self._history), self._pending_plan)
+            work = Investigation(
+                detail.strip() if action else message, list(self._history),
+                self._record.model_copy(deep=True), action,
+            )
+            if not work.message and action == "restart" and not work.record.request:
+                return Turn(answer="Enter a research request to begin.", record=work.record)
             token = self._current.set((turn, work))
             service = self._runner.session_service
             session = None
@@ -106,7 +127,8 @@ class ResearchAssistant:
                     await service.delete_session(
                         app_name=self.agent.name, user_id=session.user_id, session_id=session.id
                     )
-            self._pending_plan = work.pending_plan
+            self._record = work.record
+            turn.record = work.record.model_copy(deep=True)
             if turn.answer:
                 self._history.append({
                     "user": message,
@@ -126,11 +148,26 @@ class ResearchAssistant:
 
     def _reserve_source_call(self, name: str) -> bool:
         turn = self._current.get()[0]
-        if turn.source_calls >= self._max_source_calls:
+        limit = self._worker_source_limit
+        if turn.stages and turn.stages[-1] == "research_evaluator":
+            limit = self._max_source_calls
+        if turn.source_calls >= limit:
             return False
         turn.source_calls += 1
         turn.calls.append(name)
         return True
+
+    async def fetch_public_document(
+        self, url: str, page: int = 1, offset: int = 0, raw: bool = False
+    ) -> dict:
+        """Fetch a public original with HTTPX. Use page for PDF or offset for the next text slice."""
+        if len(url) > self.settings.sources.max_url_chars or public_url(url) is None:
+            return {"status": "invalid_public_url"}
+        if page < 1 or offset < 0:
+            return {"status": "invalid_locator"}
+        if not self._reserve_source_call("httpx_fetch"):
+            return {"status": "source_call_limit"}
+        return await fetch_document(url, self.settings.sources, page=page, offset=offset, raw=raw)
 
     async def search_public_web(self, query: str) -> dict:
         """Search public sources for the current user using a focused, public query."""

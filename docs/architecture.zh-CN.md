@@ -1,60 +1,56 @@
 # 尽职调查代理架构
 
-## 项目范围
-
-项目面向企业公开来源的初步尽职调查。用户可以先识别主体和控制关系，再看概况、选专题、复核重点结论和修订草稿，也可以指定当前就要完成的工作。现有交付入口是 CLI，报告草稿以对话文本呈现。持久化证据库、学习门控、Word 导出和 Web UI 属于后续开发阶段。
-
-## 模块与调用关系
-
-| 模块 | 职责 |
-| --- | --- |
-| [cli.py](../due_diligence/cli.py) | 解析参数，管理交互式案件，输出答复和调试轨迹。 |
-| [runtime.py](../due_diligence/runtime.py) | `ResearchAssistant` 负责一次案件会话。每轮启动 ADK Runner，管理上下文、工具预算和临时搜索结果。 |
-| [workflow.py](../due_diligence/workflow.py) | 定义 Google ADK Graph Workflow、条件路由、专题并行和复核后的补查回路。 |
-| [agents.py](../due_diligence/agents.py) 与 [prompts/](../due_diligence/prompts/) | 构建计划、主体识别、初查、专题、复核、缺口评估和撰写代理。各职责的提示词分文件维护，公开来源规则供检索与撰写代理共用。 |
-| [sources.py](../due_diligence/sources.py) 与 [preview.py](../due_diligence/preview.py) | 封装 ADK 内置 Google Search 和 URL Context，保留网页读取状态，并提供临时本机搜索预览。 |
-| [config.py](../due_diligence/config.py) 与 [config.toml](../config.toml) | 校验运行配置并创建 Gemini 客户端。客户端只从项目根目录的 `.env.local` 读取凭据。 |
-
-程序入口是异步方法 `ResearchAssistant.ask(message)`。返回的 `Turn` 包含答复、经过的阶段、工具轨迹、来源调用数和本轮临时搜索结果。一个实例对应一个案件会话，完成后调用 `close()`。同一实例的用户请求串行执行，单轮内部可以并行调查多个专题。
+项目用于从公开来源对企业或相关主体做初步调查和风险筛查，当前通过 CLI 生成带引用的审阅稿。
 
 ## 调查图
 
 ```mermaid
 flowchart TD
-    A[用户请求] --> B[计划代理输出结构化 Plan]
-    B --> C{按 action 和确认状态路由}
-    C -->|需要澄清或确认| D[提问或展示计划并结束当前轮]
-    C -->|主体识别或初查| E[主体或初查代理]
-    C -->|专题调查| F[并行专题代理]
-    C -->|直接复核| G[独立复核]
-    C -->|草稿、修订或简答| I[合成答复]
-    E --> I
-    F -->|需要复核| G
-    F -->|其余| I
-    G --> H{缺口评估与预算检查}
-    H -->|有新问题且还有预算| F
-    H -->|审查完成或预算用尽| I
+    A[Start 接收用户请求] --> B[Research Brief]
+    B -->|主体或范围有歧义| H[展示已知信息并请求确认]
+    H -->|用户补充信息| B
+    B -->|范围明确| C[Research Planner]
+    C --> D[按专题并行启动 Research Workers]
+    D --> E[明确子问题并取证]
+    E --> F[本地 Worker Evaluator]
+    F -->|有价值的新检查且还有预算| E
+    F -->|解决或达到停止条件| G[保存子问题报告]
+    G --> I[Research Evaluator 跨专题复核并合成]
+    I --> J[用户审阅]
+    J -->|修订| I
+    J -->|重新调查| B
+    J -->|同意| K[标记草稿获准]
 ```
 
-计划代理读取当前请求、近期对话和待确认计划，通过结构化 `Plan` 给出目标、专题列表和是否需要确认等字段。实际边由 Python 根据 `Plan` 选择。范围已明确的请求可直接进入相关节点，例如第一轮就复核某项结论，或在新证据出现后重做初查。
+- **Research Brief** 建立调查对象的身份图谱，包括主体标识、别名、品牌、代码、控制结构及沿革。记录重点特征、用户目的与关注点、范围、候选专题和来源。歧义影响调查时，当前轮结束并等待回答。用户也可以只要求完成 Brief。
+- **Research Planner** 按 Brief 拆分和排序任务。每个任务包括具体问题、研究价值、完成标准、检索标识和已知原文地址。程序按问题去重后再应用专题数量上限。
+- **Research Worker** 为每个专题开启独立 ADK 动态子分支。研究代理获取来源并提出阶段性答案，本地评估代理判断覆盖程度、价值和证据可靠性，并写出子报告。只有评估提出了新而具体的高价值检查且预算未用尽，当前 Worker 才继续。子报告保留 `complete`、`partial` 或 `unresolved` 状态、研究次数和适用的停止原因。
+- **Research Evaluator** 读入全部子报告，核查关键依据及冲突，按用户目的组织叙事并删除无关细节。输出后可用自然语言或 `/revise` 请求部分修改，用 `/restart` 回到 Brief，或用 `/approve` 标记草稿获准。命令由程序直接路由，自然语言草稿反馈由轻量分类代理判断。
 
-需要确认时，图展示并保存待确认计划，然后结束当前轮。下一轮识别到用户批准该计划时，从已保存版本取专题，避免把新一轮模型临时生成的其他专题带入执行。专题节点通过 ADK 动态子节点并行运行，按专题配对汇总结果。需要复核时，复核代理主动寻找相左或更新的公开材料。缺口代理输出结构化补查问题，图去除已查过的问题，并在仍有补查轮次和来源预算时返回专题节点。
+## 模块与数据边界
 
-每轮新建一个内存 ADK Session，结束后删除。跨轮只在 `ResearchAssistant` 中保留近期用户消息、截断后的答复和待确认计划。专题发现和复核记录在当前轮汇总，未来的证据引擎可补充跨轮、跨案件的证据检索。CLI 的 `/reset` 会新建案件实例。
+| 模块 | 职责 |
+| --- | --- |
+| [workflow.py](../due_diligence/workflow.py) | 声明图边、确认分支、Worker 循环和结构化交接模型。 |
+| [agents.py](../due_diligence/agents.py) 与 [prompts/](../due_diligence/prompts/) | 创建职责独立的代理，共用来源工具，各自的指令按角色放在 Markdown 文件中。 |
+| [runtime.py](../due_diligence/runtime.py) | `ResearchAssistant.ask()` 运行一轮，返回 `Turn`，其中包含答复、阶段、调用轨迹和 `ResearchRecord` 快照。 |
+| [sources.py](../due_diligence/sources.py)、[http_sources.py](../due_diligence/http_sources.py) | 隔离原生 Google 工具，提供 HTTPX 原文取回和定位。 |
+| [research_skills.py](../due_diligence/research_skills.py) | 支持从项目技能目录发现并按名称加载本地技能。 |
 
-## 来源处理与预算
+`ResearchRecord` 保存 Brief、Plan、Worker Reports、草稿和审阅状态，可用 `/brief` 查看已记录的 Brief。同一实例的用户请求串行，每轮新建并在结束后释放 ADK 内存 Session。跨轮由 `ResearchAssistant` 持有案件快照和有限对话历史，进程退出或 `/reset` 后清空。持久证据库、Word 导出和 Web UI 可以围绕这些交接点接入。
 
-- **Google Search 用于发现线索。** `search_public_web` 调用只配有内置 `google_search` 的独立代理。搜索正文和 grounding 元数据通过 `Turn.searches` 交给当前用户的临时预览。主调查图收到的是检索状态，搜索正文留在当前轮的预览路径。
-- **URL Context 用于读取指定原文。** `read_public_url` 检查公开 HTTP(S) 地址，再调用单独配置了 `url_context` 的代理。`UrlReadingGemini` 保留 SDK 返回的抓取元数据。只有请求地址对应的状态为成功时才返回提取内容。若跳转后只返回最终地址，可以用最终地址重试。
-- **工具预算与专题预算分别计算。** 当前默认每轮最多发起 24 次来源调用，搜索和 URL 读取共用此限额。一次有合法参数并已发出的调用会占用预算，即使上游失败。每批最多 8 个专题，最多补查 2 轮。主图的 ADK Runner 每轮模型调用上限为 64，单独运行的来源代理各自只允许一次模型调用。模型默认 `gemini-4-neon`，思考强度为 `MEDIUM`。
+## 网络工具与技能
 
-公开网页内容仅作研究材料。提示词要求区分已证实事实、指控、推断与查证缺口，并保留关键主张的来源、日期和位置。高影响结论通过复核分支检查来源独立性、时效和相反证据。抓取成功仅说明服务读取了指定页面，材料是否支持结论仍由调查和复核判断。
+Brief、Planner、Worker、本地评估和最终 Evaluator 都拥有完整的公开来源工具，按当前阶段的任务使用。
 
-## 维护与扩展
+- `search_public_web` 用于发现，Google Search grounding 结果单独显示给当前用户。调查代理接收调用状态，原文工具使用独立确定或由用户提供的地址。
+- `read_public_url` 使用 URL Context 解读指定页面。只有 Gemini 对指定地址返回成功状态时，才交回提取内容。
+- `fetch_public_document` 通过 HTTPX 读取原始 HTML、文本、JSON、XML 和含文字层的 PDF。可读取原始文本或整理后的 HTML，支持文字偏移和 PDF 页号。每次重定向重新检查目标，连接固定到已校验的公网地址。请求超时、响应体、返回文本长度和跳转次数由配置限制。
 
-1. **调整调查方法。** 修改 [prompts/](../due_diligence/prompts/) 下对应代理的指令。新增路线时同时检查 `Plan.action`、图的路由映射和对应测试。
-2. **接入证据引擎。** 通过来源读取和调查结果的交接点收集候选证据，通过复核节点更新审查状态。保存原文定位和结论引用关系，后续轮次按案件与专题检索。
-3. **接入报告与界面。** 先复用 `ResearchAssistant.ask()` 和 `Turn` 做交互。Word 导出可从合成阶段取得经用户审阅的草稿及引用，再交给独立的文档模块。
-4. **验证改动。** 用 `uv run --locked python -m unittest discover -s tests -v` 跑离线回归。需要观察真实路径时，使用 CLI 的 `--trace`。并行节点的工具轨迹可能交错。
+[config.toml](../config.toml) 默认每批 8 个专题、每个 Worker 最多 2 次补查、每轮 24 次来源调用，其中 4 次留给最终复核阶段。共享预算耗尽时，保留各 Worker 已查明的结果和未解决事项。
 
-设计参考了深度研究代理的协作规划与迭代阅读。项目用本地 ADK 图执行这些步骤。 [Gemini Deep Research](https://aistudio.google.com/docs/deep-research#collaborative-planning) · [ADK Graph Routes](https://adk.dev/graphs/routes/) · [ADK Dynamic Workflows](https://adk.dev/graphs/dynamic/)
+[skills/](../skills/) 下的 `SKILL.md` 使用 ADK 可读取的格式。代理平时只看到名称和描述，选择 `load_research_skill` 后才取得正文。技能正文只提供研究方法，工作流仍控制何时查证、停止或等待用户。当前包含企业尽调范围与专题、深度研究与证据评估、带引用的报告写作三个技能。范围和专题设计参考 Anthropic 尽调清单，迭代研究及报告部分参考公开研究技能并改写成当前项目适用的执行指导。 [Anthropic 尽调清单](https://github.com/anthropics/financial-services/blob/main/plugins/vertical-plugins/private-equity/skills/dd-checklist/SKILL.md) · [Foundry Deep Research](https://github.com/foundry-works/foundry-research/blob/main/skills/deep-research/SKILL.md) · [Anthropic 研究报告指南](https://github.com/anthropics/financial-services/blob/main/plugins/vertical-plugins/equity-research/skills/initiating-coverage/SKILL.md)
+
+## 验证
+
+运行 `uv run --locked python -m unittest discover -s tests -v`。离线用例以脚本化模型执行真实 ADK 图，覆盖歧义、并行任务、局部研究回路、复核预算和反馈。HTTPX 使用模拟传输验证跳转、公开地址校验和 PDF 页码。CLI 的 `--trace` 可以显示实际经过的节点和工具。

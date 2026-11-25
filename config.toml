@@ -6,6 +6,7 @@ thinking_level = "MEDIUM"
 [workflow]
 max_model_calls = 64
 max_source_calls = 24
+evaluator_source_reserve = 4
 max_topics = 8
 max_follow_up_rounds = 2
 history_turns = 6
@@ -16,3 +17,7 @@ max_query_chars = 1200
 max_question_chars = 2000
 max_url_chars = 4096
 preview_wait_seconds = 30
+fetch_timeout_seconds = 20
+fetch_max_bytes = 5242880
+fetch_max_chars = 10000
+fetch_max_redirects = 3

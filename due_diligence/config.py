@@ -20,6 +20,7 @@ class GeminiConfig(BaseModel):
 class WorkflowConfig(BaseModel):
     max_model_calls: PositiveInt
     max_source_calls: PositiveInt
+    evaluator_source_reserve: NonNegativeInt
     max_topics: PositiveInt
     max_follow_up_rounds: NonNegativeInt
     history_turns: PositiveInt
@@ -31,6 +32,10 @@ class SourcesConfig(BaseModel):
     max_question_chars: PositiveInt
     max_url_chars: PositiveInt
     preview_wait_seconds: PositiveInt
+    fetch_timeout_seconds: PositiveInt
+    fetch_max_bytes: PositiveInt
+    fetch_max_chars: PositiveInt
+    fetch_max_redirects: NonNegativeInt
 
 
 class Settings(BaseModel):

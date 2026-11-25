@@ -1,6 +1,6 @@
 # Due Diligence Agent
 
-A Google ADK assistant for preliminary corporate due diligence using public sources. It can identify a company, propose investigation topics, research approved topics in parallel, review material claims, and draft or revise findings in the conversation.
+A Google ADK assistant that researches companies from public sources and produces a cited draft for review. It moves through a Research Brief, a Research Planner, parallel Research Workers, and a Research Evaluator. Each worker checks its own evidence and follows up on useful gaps before handing off a subquestion report.
 
 ## Setup
 
@@ -11,7 +11,7 @@ uv sync --locked
 cp -n .env.local.example .env.local
 ```
 
-Set `GEMINI_API_KEY` or `GOOGLE_API_KEY` in the project root's `.env.local`. The default model is `gemini-4-neon` with medium thinking. Edit [config.toml](config.toml) to change the model, thinking level, or research budgets, or pass `--model` for a one-off model override.
+Set `GEMINI_API_KEY` or `GOOGLE_API_KEY` in the project root's `.env.local`. The default model is `gemini-4-neon` with medium thinking. Edit [config.toml](config.toml) to change research budgets or pass `--model` to override the model for one run.
 
 ## Run an investigation
 
@@ -19,18 +19,18 @@ Set `GEMINI_API_KEY` or `GOOGLE_API_KEY` in the project root's `.env.local`. The
 uv run --locked python -m due_diligence.cli --trace
 ```
 
-Use `/reset` to start a new case and `/quit` to exit. The CLI retains recent conversation history and any pending plan in the current process. With `--trace`, it prints the workflow stages and tool calls.
-
-Try these requests in the same session:
+Describe the subject, the decision the research should inform, and any scope or source restrictions. The assistant asks a focused question when the brief identifies material ambiguity. It retains the brief, plan, subquestion reports, and draft for the life of the current case.
 
 ```text
-Propose two narrow research topics about IANA example domains using only https://www.iana.org/help/example-domains. Wait for my approval.
-Approve the plan and execute both topics.
-Review whether the IANA page supports treating example.com as available for registration.
-Turn the latest findings into a short draft.
+Research whether IANA's example.com domain is available for registration. Use the official page at https://www.iana.org/help/example-domains.
+/brief
+/revise Put the answer in the first sentence and keep the citation.
+/approve
 ```
 
-Use `--prompt` to run a single request. In interactive use, the CLI presents a temporary local link for Google Search results. Use `--preview-search` to open this preview in single-request or piped mode. For document reading, provide a direct public URL. If URL Context reports only the redirected address, retry with that address.
+Use `/brief` to view the recorded brief, `/restart [scope]` to return to the brief, `/reset` to clear the case, or `/quit` to exit. You can also give draft feedback in plain language. Use `--prompt` for a single request.
+
+The stages can use Google Search for discovery, URL Context for interpretation, and HTTPX to fetch public HTML, text, JSON, XML, and text-bearing PDF originals. Grounded Google Search responses appear in a temporary local preview. Use `--preview-search` to keep it available in batch mode. Research skills are loaded on demand from [skills/](skills/).
 
 ## Development
 
@@ -38,4 +38,4 @@ Use `--prompt` to run a single request. In interactive use, the CLI presents a t
 uv run --locked python -m unittest discover -s tests -v
 ```
 
-The tests use Google ADK's runtime and graph with scripted model responses, so they run without a Gemini key or network access. The graph is defined in [workflow.py](due_diligence/workflow.py), and agent instructions live in [due_diligence/prompts](due_diligence/prompts). See the [architecture guide in Chinese](docs/architecture.zh-CN.md) for data flow, tool behavior, and extension points.
+Tests run without live API calls. The [Chinese architecture guide](docs/architecture.zh-CN.md) describes the graph, research state, source tools, and skill loading.
