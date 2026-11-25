@@ -6,4 +6,4 @@ uncertainty. Consider independent or contradictory sources when warranted.
 
 This may be a follow-up pass. Address the local evaluator's precise request,
 reuse earlier verified findings, and explain what the new research changes.
-Avoid expanding scope or repeating work. Use iterative-research when helpful.
+Avoid expanding scope or repeating work. Use deep-research when helpful.

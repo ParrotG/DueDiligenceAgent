@@ -9,11 +9,12 @@ import httpx
 from google.adk.agents import RunConfig
 from google.adk.models.google_llm import Gemini
 from google.adk.runners import InMemoryRunner
+from google.adk.skills import load_skills_from_dir
+from google.adk.tools.skill_toolset import SkillToolset
 from google.genai import errors, types
 
-from .config import load_settings, make_client
+from .config import ROOT, load_settings, make_client
 from .http_sources import fetch_document
-from .research_skills import ResearchSkills
 from .sources import (
     SUCCESS,
     URL_RETRIEVAL,
@@ -73,9 +74,13 @@ class ResearchAssistant:
         self._search_agent, self._url_agent = source_agents(
             model, url_model or model, self.settings.gemini.thinking_level
         )
+        skills = SkillToolset(
+            skills=load_skills_from_dir(ROOT / "skills"),
+            tool_filter=["list_skills", "load_skill", "load_skill_resource"],
+        )
         self.agent = make_workflow(
-            model, [self.search_public_web, self.read_public_url, self.fetch_public_document],
-            ResearchSkills(), self._current.get, self.settings, self._worker_source_limit,
+            model, [self.search_public_web, self.read_public_url, self.fetch_public_document, skills],
+            self._current.get, self.settings, self._worker_source_limit,
         )
         self._runner = InMemoryRunner(agent=self.agent, app_name=self.agent.name)
 

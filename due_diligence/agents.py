@@ -6,7 +6,7 @@ from .config import generation_config
 from .prompts import prompt, research_prompt
 
 
-def make_agents(model, network_tools, skills, schemas, thinking_level):
+def make_agents(model, research_tools, schemas, thinking_level):
     """Give each substantive research stage the same public-source tools."""
     roles = {
         "brief": "Research Brief",
@@ -17,15 +17,15 @@ def make_agents(model, network_tools, skills, schemas, thinking_level):
         "report_feedback": "Report Feedback Router",
     }
     agents = {}
-    catalogue = f"\n\n{prompt('skill_use')}\n{skills.catalogue()}"
+    skill_guidance = prompt("skill_use")
     for role, title in roles.items():
         researches = role != "report_feedback"
         agents[role] = Agent(
             name=role,
             description=title,
             model=model,
-            instruction=research_prompt(role) + catalogue if researches else prompt(role),
-            tools=[*network_tools, skills.load_research_skill] if researches else [],
+            instruction=f"{research_prompt(role)}\n\n{skill_guidance}" if researches else prompt(role),
+            tools=research_tools if researches else [],
             output_schema=schemas.get(role),
             mode="single_turn",
             generate_content_config=generation_config(thinking_level),

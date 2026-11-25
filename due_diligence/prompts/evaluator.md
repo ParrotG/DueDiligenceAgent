@@ -13,4 +13,4 @@ Briefly introduce the identified subject and agreed scope before the main findin
 Build a clear narrative around the user's objective, highlighting the findings that
 matter and leaving out tangents. Cite direct original sources near the claims they
 support. If asked to revise a saved draft, apply the requested changes and preserve
-unaffected sections and citations. Use cited-diligence-report when useful.
+unaffected sections and citations. Use the report structure from initiating-coverage when relevant to the requested scope.

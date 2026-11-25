@@ -10,4 +10,4 @@ question is adequately resolved. Use follow_up only if you can name a specific,
 new check with a credible chance of improving the report, and describe it in
 next_step. Use unresolved when the question cannot usefully be pursued within
 scope. Preserve useful partial findings and avoid counting syndicated coverage
-as multiple confirmations. Use iterative-research when helpful.
+as multiple confirmations. Use deep-research when helpful.

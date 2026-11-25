@@ -2,7 +2,7 @@
 
 from io import BytesIO
 from socket import AF_INET, SOCK_STREAM
-from unittest import IsolatedAsyncioTestCase, TestCase
+from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -10,7 +10,6 @@ from pypdf import PdfWriter
 
 from due_diligence.config import load_settings
 from due_diligence.http_sources import fetch_document, resolve_public_address
-from due_diligence.research_skills import ResearchSkills
 
 
 class HttpSourceTests(IsolatedAsyncioTestCase):
@@ -91,11 +90,3 @@ class HttpSourceTests(IsolatedAsyncioTestCase):
             result = await self.fetch(handler, page=2)
         self.assertEqual((result["status"], result["page"], result["total_pages"]),
                          ("retrieved", 2, 2))
-
-
-class SkillTests(TestCase):
-    def test_only_catalogued_skills_can_be_loaded(self):
-        skills = ResearchSkills()
-        self.assertIn("cited-diligence-report", skills.catalogue())
-        self.assertIn("instructions", skills.load_research_skill("iterative-research"))
-        self.assertEqual(skills.load_research_skill("../.env.local")["status"], "unknown_skill")

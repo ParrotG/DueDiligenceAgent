@@ -35,7 +35,6 @@ flowchart TD
 | [agents.py](../due_diligence/agents.py) 与 [prompts/](../due_diligence/prompts/) | 创建职责独立的代理，共用来源工具，各自的指令按角色放在 Markdown 文件中。 |
 | [runtime.py](../due_diligence/runtime.py) | `ResearchAssistant.ask()` 运行一轮，返回 `Turn`，其中包含答复、阶段、调用轨迹和 `ResearchRecord` 快照。 |
 | [sources.py](../due_diligence/sources.py)、[http_sources.py](../due_diligence/http_sources.py) | 隔离原生 Google 工具，提供 HTTPX 原文取回和定位。 |
-| [research_skills.py](../due_diligence/research_skills.py) | 支持从项目技能目录发现并按名称加载本地技能。 |
 
 `ResearchRecord` 保存 Brief、Plan、Worker Reports、草稿和审阅状态，可用 `/brief` 查看已记录的 Brief。同一实例的用户请求串行，每轮新建并在结束后释放 ADK 内存 Session。跨轮由 `ResearchAssistant` 持有案件快照和有限对话历史，进程退出或 `/reset` 后清空。持久证据库、Word 导出和 Web UI 可以围绕这些交接点接入。
 
@@ -49,7 +48,7 @@ Brief、Planner、Worker、本地评估和最终 Evaluator 都拥有完整的公
 
 [config.toml](../config.toml) 默认每批 8 个专题、每个 Worker 最多 2 次补查、每轮 24 次来源调用，其中 4 次留给最终复核阶段。共享预算耗尽时，保留各 Worker 已查明的结果和未解决事项。
 
-[skills/](../skills/) 下的 `SKILL.md` 使用 ADK 可读取的格式。代理平时只看到名称和描述，选择 `load_research_skill` 后才取得正文。技能正文只提供研究方法，工作流仍控制何时查证、停止或等待用户。当前包含企业尽调范围与专题、深度研究与证据评估、带引用的报告写作三个技能。范围和专题设计参考 Anthropic 尽调清单，迭代研究及报告部分参考公开研究技能并改写成当前项目适用的执行指导。 [Anthropic 尽调清单](https://github.com/anthropics/financial-services/blob/main/plugins/vertical-plugins/private-equity/skills/dd-checklist/SKILL.md) · [Foundry Deep Research](https://github.com/foundry-works/foundry-research/blob/main/skills/deep-research/SKILL.md) · [Anthropic 研究报告指南](https://github.com/anthropics/financial-services/blob/main/plugins/vertical-plugins/equity-research/skills/initiating-coverage/SKILL.md)
+[skills/](../skills/) 保存原样下载的上游技能、随附资源及许可证。运行时通过 `google.adk.skills.load_skills_from_dir()` 读取原生 `SKILL.md`，并由 ADK 的 `SkillToolset` 提供 `list_skills`、`load_skill` 和 `load_skill_resource`。上游技能用于辅助本项目的调查节点，工具集提供说明和资源读取。导入版本与兼容性选择记录在 [技能来源清单](../skills/UPSTREAM.md)。 [ADK 技能文档](https://adk.dev/skills/)
 
 ## 验证
 

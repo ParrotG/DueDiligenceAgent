@@ -185,8 +185,16 @@ class CoreTests(IsolatedAsyncioTestCase):
         self.assertFalse(fourth.record.draft)
 
     async def test_all_research_stages_can_load_skills_and_read_the_web(self):
-        self.model.add("brief", call("load_research_skill", name="public-company-diligence"), brief())
-        self.model.add("planner", plan(CONTROL))
+        self.model.add(
+            "brief", call("list_skills"), call("load_skill", skill_name="dd-checklist"), brief(),
+        )
+        self.model.add(
+            "planner",
+            call("load_skill", skill_name="initiating-coverage"),
+            call("load_skill_resource", skill_name="initiating-coverage",
+                 file_path="assets/quality-checklist.md"),
+            plan(CONTROL),
+        )
         self.model.add("worker", call("fetch_public_document", url=URL), message("55% of votes."))
         self.model.add("worker_evaluator", read_call(), assessment())
         self.model.add("url", message("55% of votes.", custom_metadata=retrieval()))
@@ -196,16 +204,23 @@ class CoreTests(IsolatedAsyncioTestCase):
             fetch.return_value = {"status": "retrieved", "text": "55% of votes.", "url": URL}
             turn = await self.assistant.ask("Investigate the ownership filing.")
         self.assertCountEqual(turn.calls, [
-            "load_research_skill", "fetch_public_document", "httpx_fetch", "read_public_url", "url_context"
+            "list_skills", "load_skill", "load_skill", "load_skill_resource",
+            "fetch_public_document", "httpx_fetch", "read_public_url", "url_context",
         ])
-        expected = {"search_public_web", "read_public_url", "fetch_public_document", "load_research_skill"}
+        expected = {
+            "search_public_web", "read_public_url", "fetch_public_document",
+            "list_skills", "load_skill", "load_skill_resource",
+        }
         for role in ("brief", "planner", "worker", "worker_evaluator", "evaluator"):
             declarations = {
                 decl.name for tool in self.model._requests[role][0].config.tools or []
                 for decl in tool.function_declarations or []
             }
             self.assertTrue(expected.issubset(declarations), role)
-        self.assertIn("loaded", str(self.model._requests["brief"][1].contents))
+            self.assertNotIn("run_skill_script", declarations, role)
+        self.assertIn("deep-research", str(self.model._requests["brief"][1].contents))
+        self.assertIn("Due Diligence Checklist", str(self.model._requests["brief"][2].contents))
+        self.assertIn("Pre-Delivery Final Check", str(self.model._requests["planner"][2].contents))
 
     async def test_grounded_search_text_stays_outside_question_reports(self):
         self.model.add(

@@ -110,10 +110,10 @@ def brief_text(brief: Brief) -> str:
     return "\n\n".join(section for section in sections if section)
 
 
-def make_workflow(model, network_tools, skills, current, settings, worker_source_limit):
+def make_workflow(model, research_tools, current, settings, worker_source_limit):
     """Create the investigation graph and one bounded local loop per worker."""
     agents = make_agents(
-        model, network_tools, skills,
+        model, research_tools,
         {"brief": Brief, "planner": ResearchPlan, "worker_evaluator": Assessment,
          "report_feedback": Feedback},
         settings.gemini.thinking_level,

@@ -30,7 +30,7 @@ Research whether IANA's example.com domain is available for registration. Use th
 
 Use `/brief` to view the recorded brief, `/restart [scope]` to return to the brief, `/reset` to clear the case, or `/quit` to exit. You can also give draft feedback in plain language. Use `--prompt` for a single request.
 
-The stages can use Google Search for discovery, URL Context for interpretation, and HTTPX to fetch public HTML, text, JSON, XML, and text-bearing PDF originals. Grounded Google Search responses appear in a temporary local preview. Use `--preview-search` to keep it available in batch mode. Research skills are loaded on demand from [skills/](skills/).
+The stages can use Google Search for discovery, URL Context for interpretation, and HTTPX to fetch public HTML, text, JSON, XML, and text-bearing PDF originals. Grounded Google Search responses appear in a temporary local preview. Use `--preview-search` to keep it available in batch mode. The native ADK SkillToolset loads unmodified upstream [research skills](skills/UPSTREAM.md) and their bundled reference files on demand.
 
 ## Development
 

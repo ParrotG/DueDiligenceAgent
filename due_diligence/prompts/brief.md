@@ -10,7 +10,7 @@ user purpose and interests, time and geography boundaries, and candidate
 research questions. Use aliases and historical names to suggest search terms
 without merging unrelated entities. Record independently verifiable sources
 with direct URLs, dates and locations. Flag unresolved details and avoid
-speculation. Use public-company-diligence for a company investigation where
+speculation. Use dd-checklist for a company investigation where
 applicable.
 
 If the legal entity, intended scope or purpose is materially ambiguous, include

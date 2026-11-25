@@ -1,0 +1,72 @@
+{
+  "skill_name": "deep-research",
+  "purpose": "Lightweight routing + output-contract fixtures. These are specs, not executed against a live model in CI. tests/test_routing_fixtures.py validates that each fixture is well-formed and routes to a real skill; they also serve as worked examples of when deep-research is (and is NOT) the right skill, and what its output must contain.",
+  "fixtures": [
+    {
+      "id": "dr-01-cited-report",
+      "request": "Write a thorough, cited report on the state of solid-state battery commercialization in 2026 — the key players, expected timelines, and the remaining technical barriers.",
+      "expected_routing": {
+        "skill": "deep-research",
+        "reason": "Open-ended multi-source synthesis into a single cited report. Not a recurring digest, not a dossier on one named entity, not Q&A over user-supplied sources.",
+        "not": ["news-monitoring", "entity-research", "notebooklm-mode"]
+      },
+      "required_output_fields": ["numbered inline citations [N] matching the source table", "evidence-basis tags ([VERIFIED]/[SOURCED]/[REASONED]/[ESTIMATED]) with an evidence key", "sources/references list with quality tiers", "research stats"],
+      "forbidden_patterns": ["(?i)as an ai language model", "(?i)i cannot (browse|access) the (web|internet)", "(?i)\\bi made (this|that|these) up\\b"]
+    },
+    {
+      "id": "dr-02-boundary-fact-check",
+      "request": "Is it true that more than half of new cars sold in Norway in 2025 were fully electric? Check this and show your sources.",
+      "expected_routing": {
+        "skill": "deep-research",
+        "reason": "Since fact-checker retired (its claim-verification role absorbed into deep-research), a single, specific claim to verify routes to deep-research: its fact-check report category, evidence-basis gates, and citation discipline cover claim-level verification.",
+        "not": ["news-monitoring"]
+      },
+      "required_output_fields": ["evidence for/against two-column table", "preliminary verdict", "evidence-basis tags ([VERIFIED]/[SOURCED]/[REASONED]/[ESTIMATED]) with an evidence key", "numbered inline citations [N] matching the source table"],
+      "forbidden_patterns": ["(?i)as an ai language model", "(?i)i don't have access to", "(?i)\\bverdict: false\\b"]
+    },
+    {
+      "id": "dr-03-boundary-dossier",
+      "request": "Give me a background dossier on Acme Robotics Ltd — who owns it, any adverse media, and whether it has sanctions exposure.",
+      "expected_routing": {
+        "skill": "entity-research",
+        "reason": "Background/vetting of one named entity with ownership, adverse-media and sanctions signals is entity-research, not a general research report.",
+        "not": ["deep-research"]
+      },
+      "required_output_fields": ["entity identity", "ownership/management", "adverse media", "sanctions/PEP signals", "sources"],
+      "forbidden_patterns": ["(?i)\\bcleared\\b", "(?i)\\bno sanctions risk\\b", "(?i)compliance determination"]
+    },
+    {
+      "id": "dr-04-boundary-vault",
+      "request": "I'm going to paste five PDFs. Answer my questions strictly from those documents, with quotes, and tell me when they don't cover something.",
+      "expected_routing": {
+        "skill": "notebooklm-mode",
+        "reason": "Strictly-grounded Q&A over user-supplied sources is notebooklm-mode (vault), not open-web deep research.",
+        "not": ["deep-research"]
+      },
+      "required_output_fields": ["grounded answer", "verbatim quotes", "source attribution", "gaps identified"],
+      "forbidden_patterns": ["(?i)as an ai language model"]
+    },
+    {
+      "id": "dr-05-clarify-vague",
+      "request": "can you research AI for me please",
+      "expected_routing": {
+        "skill": "deep-research",
+        "reason": "Routes to deep-research, but the in-skill Step 0 clarification phase should trigger: the request is too vague (2 words, no scope) and should elicit a clarification before planning. The fixture asserts the skill is correct but the first agent output should be a clarification question, not a report.",
+        "not": ["news-monitoring", "entity-research", "notebooklm-mode"]
+      },
+      "required_output_fields": ["clarification question(s) before any research begins"],
+      "forbidden_patterns": ["(?i)as an ai language model"]
+    },
+    {
+      "id": "dr-06-skip-clarification-specific",
+      "request": "Write a comprehensive comparison of Qdrant vs pgvector for RAG applications — performance, scalability, ease of deployment, and cost.",
+      "expected_routing": {
+        "skill": "deep-research",
+        "reason": "Specific multi-faceted comparison question with clear scope. Step 0 clarification should NOT trigger — the question is specific enough to generate productive search queries immediately. Routes to deep-research and proceeds straight to planning.",
+        "not": ["news-monitoring", "entity-research", "notebooklm-mode"]
+      },
+      "required_output_fields": ["numbered inline citations [N] matching the source table", "evidence-basis tags ([VERIFIED]/[SOURCED]/[REASONED]/[ESTIMATED]) with an evidence key", "comparison table", "sources/references list with quality tiers", "research stats"],
+      "forbidden_patterns": ["(?i)as an ai language model", "(?i)before i begin researching, i'd like to clarify"]
+    }
+  ]
+}
