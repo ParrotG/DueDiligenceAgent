@@ -12,7 +12,8 @@ from google.adk.runners import InMemoryRunner
 from google.adk.tools import google_search, url_context
 from google.genai import errors, types
 
-from .agents import SOURCE_RULES
+from .config import generation_config
+from .prompts import research_prompt
 
 URL_RETRIEVAL = "public_url_retrieval"
 SUCCESS = types.UrlRetrievalStatus.URL_RETRIEVAL_STATUS_SUCCESS
@@ -37,7 +38,7 @@ class UrlReadingGemini(Gemini):
 def public_url(url: str) -> str | None:
     """Accept a public HTTP(S) URL for Gemini's remote URL Context tool."""
     url = url.strip()
-    if len(url) > 4096 or "\\" in url or any(char.isspace() or ord(char) < 32 for char in url):
+    if "\\" in url or any(char.isspace() or ord(char) < 32 for char in url):
         return None
     try:
         parsed = urlsplit(url)
@@ -61,27 +62,21 @@ def public_url(url: str) -> str | None:
     return parsed._replace(path=parsed.path or "/", fragment="").geturl()
 
 
-def source_agents(model, url_model):
+def source_agents(model, url_model, thinking_level):
     """Keep each native tool on its own root agent for ADK compatibility."""
     return (
         Agent(
             name="public_search",
             model=model,
-            instruction=(
-                SOURCE_RULES + " Use Google Search to respond to the research query. "
-                "Give a concise, grounded response with sources."
-            ),
+            instruction=research_prompt("search"),
+            generate_content_config=generation_config(thinking_level),
             tools=[google_search],
         ),
         Agent(
             name="public_url_reader",
             model=url_model,
-            instruction=(
-                SOURCE_RULES + " Use URL Context to read only the supplied URL. "
-                "Extract findings pertinent to the question, with publication date "
-                "and page or section if identifiable. If retrieval fails, say so. "
-                "Do not fill gaps with prior knowledge."
-            ),
+            instruction=research_prompt("url_reader"),
+            generate_content_config=generation_config(thinking_level),
             tools=[url_context],
         ),
     )

@@ -220,6 +220,8 @@ dependencies = [
     { name = "google-adk" },
     { name = "google-genai" },
     { name = "httpx" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
 ]
 
 [package.metadata]
@@ -227,6 +229,8 @@ requires-dist = [
     { name = "google-adk", specifier = "==2.15.0" },
     { name = "google-genai", specifier = ">=2.34,<3" },
     { name = "httpx", specifier = ">=0.28.1,<1" },
+    { name = "pydantic", specifier = ">=2.12.5,<3" },
+    { name = "python-dotenv", specifier = ">=1.2.1,<2" },
 ]
 
 [[package]]

@@ -2,7 +2,6 @@
 
 import argparse
 import asyncio
-import os
 import sys
 from contextlib import closing
 
@@ -11,7 +10,8 @@ from google.adk.agents.invocation_context import LlmCallsLimitExceededError
 from google.genai import errors
 
 from .preview import SearchPreview
-from .runtime import DEFAULT_MODEL, ResearchAssistant
+from .config import load_settings
+from .runtime import ResearchAssistant
 from .sources import source_error
 
 
@@ -21,7 +21,8 @@ def terminal_text(text: str) -> str:
 
 
 async def run(args: argparse.Namespace) -> int:
-    assistant = ResearchAssistant(args.model)
+    settings = load_settings()
+    assistant = ResearchAssistant(args.model, settings=settings)
 
     async def respond(message: str) -> bool:
         try:
@@ -33,6 +34,7 @@ async def run(args: argparse.Namespace) -> int:
             print("Error: The turn reached its model call limit.", file=sys.stderr)
             return False
         if args.trace:
+            print(f"Workflow: {' -> '.join(turn.stages)}", file=sys.stderr)
             calls = " -> ".join(turn.calls) or "none"
             print(f"Tools: {calls}", file=sys.stderr)
         print(terminal_text(turn.answer) or "The agent returned no answer.")
@@ -43,7 +45,7 @@ async def run(args: argparse.Namespace) -> int:
                     if sys.stdin.isatty():
                         await asyncio.to_thread(input, "Press Enter when finished viewing: ")
                     else:
-                        await asyncio.to_thread(server.viewed.wait, 30)
+                        await asyncio.to_thread(server.viewed.wait, settings.sources.preview_wait_seconds)
             except OSError:
                 print("Could not open the local Google Search preview.", file=sys.stderr)
         elif turn.searches:
@@ -60,7 +62,7 @@ async def run(args: argparse.Namespace) -> int:
                 return 0
             if message == "/reset":
                 await assistant.close()
-                assistant = ResearchAssistant(args.model)
+                assistant = ResearchAssistant(args.model, settings=settings)
                 print("New case started.")
             elif message:
                 await respond(message)
@@ -73,20 +75,20 @@ async def run(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prompt", help="Send one request and exit.")
-    parser.add_argument("--model", default=os.getenv("DUE_DILIGENCE_MODEL", DEFAULT_MODEL))
+    parser.add_argument("--model", help="Override the model in config.toml.")
     parser.add_argument("--trace", action="store_true", help="Show tool names on stderr.")
     parser.add_argument(
         "--preview-search",
         action="store_true",
-        help="In batch mode, wait up to 30 seconds for the local search preview to open.",
+        help="In batch mode, wait for the local search preview to open.",
     )
     args = parser.parse_args()
     if args.prompt is not None and not args.prompt.strip():
         parser.error("--prompt must contain a research request.")
-    if not (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")):
-        parser.error("Set GEMINI_API_KEY or GOOGLE_API_KEY before running a live case.")
     try:
         return asyncio.run(run(args))
+    except (ValueError, OSError) as error:
+        parser.error(str(error))
     except KeyboardInterrupt:
         return 130
 

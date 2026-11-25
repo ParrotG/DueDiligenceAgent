@@ -1,8 +1,8 @@
 """Test CLI validation and the browser representation of search results."""
 
-import os
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from google.genai import types
@@ -40,13 +40,19 @@ class CliTests(TestCase):
         self.assertIn('<div class="suggestions">Try a search</div>', html)
 
     def run_cli(self, *args):
-        env = os.environ.copy()
-        for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
-            env.pop(key, None)
-        return subprocess.run(
-            [sys.executable, "-m", "due_diligence.cli", *args],
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=15,
-        )
+        with TemporaryDirectory() as directory:
+            return subprocess.run(
+                [sys.executable, "-c", """
+import sys
+from pathlib import Path
+from due_diligence import cli, runtime
+from due_diligence.config import make_client
+
+file = Path(sys.argv.pop(1)) / ".env.local"
+runtime.make_client = lambda settings: make_client(settings, file)
+raise SystemExit(cli.main())
+""", directory, *args],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
